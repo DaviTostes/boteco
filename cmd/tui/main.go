@@ -43,34 +43,48 @@ func WriteMsg(msgs *strings.Builder, m *ai.Message) {
 type errMsg struct{ err error }
 type generatedMsg struct {
 	resp string
+	done bool
 	err  error
 }
 
-func generate(m model, prompt string) tea.Cmd {
+func waitChunk(m model) tea.Cmd {
 	return func() tea.Msg {
-		stream := gen.GenerateStream(m.g, gen.SystemPrompt, prompt, gen.Tools, nil, m.messages)
-		for result, err := range stream {
-			if err != nil {
-				return generatedMsg{resp: "", err: err}
-			}
-
-			if result.Done {
-				return generatedMsg{resp: result.Response.Text(), err: nil}
-			}
-		}
-		return generatedMsg{resp: "", err: nil}
+		return <-m.streamCh
 	}
 }
 
+func startGeneration(m model, prompt string) tea.Cmd {
+	go func() {
+		stream := gen.GenerateStream(m.g, gen.SystemPrompt, prompt, gen.Tools, nil, m.messages)
+		for result, err := range stream {
+			if err != nil {
+				m.streamCh <- generatedMsg{resp: "", err: err}
+			}
+
+			if result.Done {
+				m.streamCh <- generatedMsg{resp: result.Response.Text(), done: true, err: nil}
+				break
+			}
+
+			m.streamCh <- generatedMsg{resp: result.Chunk.Text(), err: nil}
+		}
+	}()
+
+	return waitChunk(m)
+}
+
 type model struct {
-	viewport    viewport.Model
-	textarea    textarea.Model
-	spinner     spinner.Model
-	g           *genkit.Genkit
-	messages    []*ai.Message
-	generating  bool
-	doubleCtrlC bool
-	err         error
+	viewport       viewport.Model
+	textarea       textarea.Model
+	spinner        spinner.Model
+	spinning       bool
+	g              *genkit.Genkit
+	messages       []*ai.Message
+	currentMessage string
+	streamCh       chan generatedMsg
+	generating     bool
+	doubleCtrlC    bool
+	err            error
 }
 
 func (m model) renderMessages() string {
@@ -78,6 +92,27 @@ func (m model) renderMessages() string {
 	for _, msg := range m.messages {
 		WriteMsg(&b, msg)
 	}
+	return lipgloss.NewStyle().
+		Width(m.viewport.Width()).
+		Height(m.viewport.Height()).
+		AlignVertical(lipgloss.Bottom).
+		Render(b.String())
+}
+
+func (m model) renderLive() string {
+	var b strings.Builder
+	for _, msg := range m.messages {
+		WriteMsg(&b, msg)
+	}
+
+	t := "\n  " + m.currentMessage + "\n\n"
+	t, _ = glamour.Render(t, "dark")
+
+	roleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true)
+	b.WriteString(roleStyle.Render("| model"))
+	b.WriteString("\n")
+	b.WriteString(t)
+
 	return lipgloss.NewStyle().
 		Width(m.viewport.Width()).
 		Height(m.viewport.Height()).
@@ -115,13 +150,16 @@ func initialModel(g *genkit.Genkit) model {
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
 	return model{
-		textarea:   ta,
-		viewport:   vp,
-		spinner:    sp,
-		g:          g,
-		messages:   []*ai.Message{},
-		generating: false,
-		err:        nil,
+		textarea:       ta,
+		viewport:       vp,
+		spinner:        sp,
+		spinning:       false,
+		g:              g,
+		messages:       []*ai.Message{},
+		currentMessage: "",
+		streamCh:       make(chan generatedMsg),
+		generating:     false,
+		err:            nil,
 	}
 }
 
@@ -164,6 +202,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 
 		case "enter":
+			if m.generating {
+				return m, nil
+			}
+
 			prompt := m.textarea.Value()
 
 			m.messages = append(m.messages, &ai.Message{
@@ -178,31 +220,44 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 
 			m.generating = true
+			m.spinning = true
 
-			return m, tea.Batch(generate(m, prompt), m.spinner.Tick)
+			return m, tea.Batch(startGeneration(m, prompt), m.spinner.Tick)
 		}
 
 	case generatedMsg:
-		m.generating = false
+		m.spinning = false
 
 		if msg.err != nil {
+			m.generating = false
 			m.messages = append(m.messages, &ai.Message{
 				Role:    "assistant",
 				Content: []*ai.Part{{Text: "error: " + msg.err.Error()}},
 			})
-		} else {
+
+			m.viewport.SetContent(m.renderMessages())
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+
+		if msg.done {
+			m.generating = false
 			m.messages = append(m.messages, &ai.Message{
 				Role:    "model",
 				Content: []*ai.Part{{Text: msg.resp}},
 			})
+
+			m.viewport.SetContent(m.renderMessages())
+			m.viewport.GotoBottom()
+			return m, nil
 		}
 
-		m.viewport.SetContent(m.renderMessages())
+		m.currentMessage += msg.resp
+
+		m.viewport.SetContent(m.renderLive())
 		m.viewport.GotoBottom()
 
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
+		return m, waitChunk(m)
 
 	case cursor.BlinkMsg:
 		var cmd tea.Cmd
@@ -210,7 +265,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case spinner.TickMsg:
-		if !m.generating {
+		if !m.spinning {
 			return m, nil
 		}
 
@@ -262,5 +317,4 @@ func main() {
 		fmt.Printf("Alas, there's been an error: %v", err)
 		os.Exit(1)
 	}
-
 }
