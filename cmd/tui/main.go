@@ -26,15 +26,15 @@ func WriteMsg(msgs *strings.Builder, m *ai.Message) {
 
 	switch m.Role {
 	case "user":
-		c = lipgloss.Color("2")
+		c = lipgloss.Color("227")
 	case "model":
-		c = lipgloss.Color("5")
+		c = lipgloss.Color("86")
 		t, _ = glamour.Render(m.Text(), "dark")
 	case "assistant":
 		c = lipgloss.Color("3")
 	}
 
-	roleStyle := lipgloss.NewStyle().Foreground(c)
+	roleStyle := lipgloss.NewStyle().Foreground(c).Bold(true)
 	msgs.WriteString(roleStyle.Render("| " + string(m.Role)))
 	msgs.WriteString("\n")
 	msgs.WriteString(t)
@@ -198,6 +198,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
 
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
