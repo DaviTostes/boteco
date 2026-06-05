@@ -1,19 +1,32 @@
 package main
 
 import (
+	"boteco/internal/config"
 	"boteco/internal/gen"
 	"fmt"
+	"log/slog"
+	"os"
+	"time"
 )
 
 func main() {
-	g, err := gen.InitGenkit()
+	c, err := config.GetConfig()
 	if err != nil {
 		panic(err)
 	}
 
-	prompt := "How to handle channels in go"
+	g, err := gen.InitGenkit(c.Gemini.ApiKey)
+	if err != nil {
+		panic(err)
+	}
 
-	stream := gen.GenerateStream(g, gen.SystemPrompt, prompt, gen.Tools, nil, nil)
+	prompt := "When is the next brazil game in the world cup?"
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelWarn,
+	})))
+
+	stream := gen.GenerateStream(g, gen.BuildSystemPrompt(time.Now()), prompt, gen.Tools, nil)
 	for result, err := range stream {
 		if err != nil {
 			panic(err)

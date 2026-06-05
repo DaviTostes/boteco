@@ -28,8 +28,7 @@ func InitGenkit(apiKey string) (*genkit.Genkit, error) {
 	return g, nil
 }
 
-func Generate(g *genkit.Genkit, system, prompt string, tools []ai.ToolRef,
-	outputFormat any, messages []*ai.Message) (string, error) {
+func Generate(g *genkit.Genkit, system, prompt string, tools []ai.ToolRef, messages []*ai.Message) (string, error) {
 	resp, err := genkit.Generate(
 		context.Background(), g,
 		ai.WithModelName("googleai/gemini-3.1-pro-preview"),
@@ -43,14 +42,14 @@ func Generate(g *genkit.Genkit, system, prompt string, tools []ai.ToolRef,
 	return resp.Text(), err
 }
 
-func GenerateStream(g *genkit.Genkit, system, prompt string, tools []ai.ToolRef,
-	outputFormat any, messages []*ai.Message) iter.Seq2[*ai.ModelStreamValue, error] {
+func GenerateStream(g *genkit.Genkit, system, prompt string, tools []ai.ToolRef, messages []*ai.Message) iter.Seq2[*ai.ModelStreamValue, error] {
 	resp := genkit.GenerateStream(
 		context.Background(), g,
-		ai.WithModelName("googleai/gemini-3.1-pro-preview"),
+		ai.WithModelName("googleai/gemini-3.5-flash"),
 		ai.WithSystem(system),
 		ai.WithPrompt(prompt),
 		ai.WithTools(tools...),
+		ai.WithMaxTurns(25),
 		ai.WithMessages(messages...),
 	)
 

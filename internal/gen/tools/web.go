@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -24,18 +23,36 @@ type SearchResult struct {
 
 var httpClient = &http.Client{Timeout: 15 * time.Second}
 
-func WebSearch(ctx context.Context, query string) (string, error) {
+func WebSearch(ctx context.Context, query, freshness string) (string, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return "", fmt.Errorf("empty query")
 	}
 
-	endpoint := "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(query)
+	q := url.Values{}
+	q.Set("q", query)
+	q.Set("kl", "us-en")
+	switch freshness {
+	case "day":
+		q.Set("df", "d")
+	case "week":
+		q.Set("df", "w")
+	case "month":
+		q.Set("df", "m")
+	case "year":
+		q.Set("df", "y")
+	}
+
+	endpoint := "https://html.duckduckgo.com/html/?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) Gecko/1.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("DNT", "1")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -52,15 +69,16 @@ func WebSearch(ctx context.Context, query string) (string, error) {
 		return "", err
 	}
 
-	results := parseDDG(string(body))
-	if len(results) == 0 {
-		log.Printf("DDG zero results, status=%d body_len=%d head=%.200q", resp.StatusCode, len(body), string(body))
-	}
+	results := parseDDGHTML(string(body))
 	if len(results) > 5 {
 		results = results[:5]
 	}
 
-	out, err := json.Marshal(results)
+	if len(results) == 0 {
+		return `{"results":[],"note":"No results parsed. Do not answer from prior knowledge for time-sensitive facts; tell the user the search returned nothing and offer to retry."}`, nil
+	}
+
+	out, err := json.Marshal(map[string]any{"results": results})
 	if err != nil {
 		return "", err
 	}
@@ -68,24 +86,60 @@ func WebSearch(ctx context.Context, query string) (string, error) {
 }
 
 var (
-	reResult = regexp.MustCompile(`(?s)<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?<a[^>]*class="result__snippet"[^>]*>(.*?)</a>`)
-	reTag    = regexp.MustCompile(`<[^>]+>`)
-	reSpaces = regexp.MustCompile(`\s+`)
+	reResultLink = regexp.MustCompile(`(?s)<a\b([^>]*\bclass="result__a"[^>]*)>(.*?)</a>`)
+	reSnippet    = regexp.MustCompile(`(?s)<a\b[^>]*\bclass="result__snippet"[^>]*>(.*?)</a>`)
+	reHref       = regexp.MustCompile(`href="([^"]+)"`)
+	reTag        = regexp.MustCompile(`<[^>]+>`)
+	reSpaces     = regexp.MustCompile(`\s+`)
 )
 
-func parseDDG(html string) []SearchResult {
-	matches := reResult.FindAllStringSubmatch(html, -1)
-	results := make([]SearchResult, 0, len(matches))
-	for _, m := range matches {
-		u := cleanDDGURL(m[1])
-		title := stripHTML(m[2])
-		snippet := stripHTML(m[3])
-		if u == "" || title == "" {
+func parseDDGHTML(html string) []SearchResult {
+	links := reResultLink.FindAllStringSubmatch(html, -1)
+	snippets := reSnippet.FindAllStringSubmatch(html, -1)
+
+	results := make([]SearchResult, 0, len(links))
+	si := 0
+	for _, m := range links {
+		attrs, inner := m[1], m[2]
+		hm := reHref.FindStringSubmatch(attrs)
+		if hm == nil {
 			continue
 		}
-		results = append(results, SearchResult{Title: title, URL: u, Snippet: snippet})
+		link := normalizeURL(hm[1])
+		title := stripHTML(inner)
+		if link == "" || title == "" {
+			continue
+		}
+		snippet := ""
+		if si < len(snippets) {
+			snippet = stripHTML(snippets[si][1])
+			si++
+		}
+		results = append(results, SearchResult{Title: title, URL: link, Snippet: snippet})
 	}
 	return results
+}
+
+func normalizeURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "//") {
+		raw = "https:" + raw
+	}
+	if strings.Contains(raw, "duckduckgo.com/l/") {
+		if u, err := url.Parse(raw); err == nil {
+			if target := u.Query().Get("uddg"); target != "" {
+				return target
+			}
+		}
+		return ""
+	}
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		if strings.Contains(raw, "duckduckgo.com") {
+			return ""
+		}
+		return raw
+	}
+	return ""
 }
 
 func stripHTML(s string) string {
@@ -94,45 +148,17 @@ func stripHTML(s string) string {
 	return strings.TrimSpace(s)
 }
 
-func cleanDDGURL(raw string) string {
-	if strings.HasPrefix(raw, "//duckduckgo.com/l/") || strings.HasPrefix(raw, "/l/") {
-		if u, err := url.Parse(raw); err == nil {
-			if real := u.Query().Get("uddg"); real != "" {
-				if decoded, err := url.QueryUnescape(real); err == nil {
-					return decoded
-				}
-			}
-		}
-	}
-	if strings.HasPrefix(raw, "//") {
-		return "https:" + raw
-	}
-	return raw
-}
-
 type WebSearchInput struct {
-	Query      string          `json:"query,omitempty"`
-	Parameters *WebSearchInner `json:"parameters,omitempty"`
-}
-
-type WebSearchInner struct {
-	Query string `json:"query"`
+	Query     string `json:"query"`
+	Freshness string `json:"freshness,omitempty"`
 }
 
 func WebSearchTool(g *genkit.Genkit) *ai.ToolDef[WebSearchInput, string] {
 	return genkit.DefineTool(g, "web_search",
-		"Search the web for current or time-sensitive information. Pass {\"query\": \"...\"}.",
+		`Search the web for current or time-sensitive information. `+
+			`Pass {"query": "..."} and optionally {"freshness": "day|week|month|year"}. `+
+			`Trust the returned results over your own knowledge.`,
 		func(ctx *ai.ToolContext, input WebSearchInput) (string, error) {
-			q := input.Query
-			if q == "" && input.Parameters != nil {
-				q = input.Parameters.Query
-			}
-
-			result, err := WebSearch(ctx.Context, q)
-			if err != nil {
-				return "", err
-			}
-
-			return result, nil
+			return WebSearch(ctx.Context, input.Query, input.Freshness)
 		})
 }

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/cursor"
 	"charm.land/bubbles/v2/spinner"
@@ -41,10 +42,11 @@ func waitChunk(m model) tea.Cmd {
 
 func startGeneration(m model, prompt string) tea.Cmd {
 	go func() {
-		stream := gen.GenerateStream(m.g, gen.SystemPrompt, prompt, gen.Tools, nil, m.messages)
+		stream := gen.GenerateStream(m.g, gen.BuildSystemPrompt(time.Now()), prompt, gen.Tools, m.messages)
 		for result, err := range stream {
 			if err != nil {
 				m.streamCh <- generatedMsg{resp: "", err: err}
+				return
 			}
 
 			if result.Done {
@@ -137,6 +139,8 @@ func initialModel() model {
 	if err != nil {
 		panic(err)
 	}
+
+	gen.BuildSystemPrompt(time.Now())
 
 	g, err := gen.InitGenkit(c.Gemini.ApiKey)
 	if err != nil {
@@ -249,15 +253,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case generatedMsg:
-		m.spinning = false
-
 		if msg.err != nil {
-			m.generating = false
-			m.currentMessage = ""
 			m.messages = append(m.messages, &ai.Message{
 				Role:    "assistant",
 				Content: []*ai.Part{{Text: "error: " + msg.err.Error()}},
 			})
+
+			m.spinning = false
+			m.generating = false
+			m.currentMessage = ""
 
 			m.viewport.SetContent(m.renderMessages())
 			m.viewport.GotoBottom()
@@ -265,12 +269,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if msg.done {
-			m.generating = false
-			m.currentMessage = ""
 			m.messages = append(m.messages, &ai.Message{
 				Role:    "model",
-				Content: []*ai.Part{{Text: msg.resp}},
+				Content: []*ai.Part{{Text: m.currentMessage}},
 			})
+
+			m.spinning = false
+			m.generating = false
+			m.currentMessage = ""
 
 			m.viewport.SetContent(m.renderMessages())
 			m.viewport.GotoBottom()
@@ -279,8 +285,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.currentMessage += msg.resp
 
-		m.viewport.SetContent(m.renderLive())
-		m.viewport.GotoBottom()
+		if m.currentMessage != "" {
+			m.spinning = false
+			m.viewport.SetContent(m.renderLive())
+			m.viewport.GotoBottom()
+		}
 
 		return m, waitChunk(m)
 
