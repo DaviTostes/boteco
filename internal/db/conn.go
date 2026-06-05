@@ -28,5 +28,12 @@ func Connect() error {
 	);
 	`)
 
+	_, err = DB.Exec(`
+	CREATE TABLE IF NOT EXISTS memories(
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		description TEXT NOT NULL
+	);
+	`)
+
 	return err
 }
