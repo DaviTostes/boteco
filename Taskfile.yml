@@ -9,3 +9,6 @@ tasks:
   test:
     cmds:
       - go run cmd/test/main.go
+  make:
+    cmds:
+      - go build -o boteco ./cmd/tui/main.go && mv boteco ~/.local/bin/

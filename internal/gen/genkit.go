@@ -74,8 +74,8 @@ func GenerateStream(g *genkit.Genkit, system, prompt string, tools []ai.ToolRef,
 		ai.WithSystem(system),
 		ai.WithPrompt(prompt),
 		ai.WithTools(tools...),
-		ai.WithMessages(messages...),
 		ai.WithMaxTurns(25),
+		ai.WithMessages(messages...),
 	)
 
 	return resp

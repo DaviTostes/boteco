@@ -1,6 +1,7 @@
 package main
 
 import (
+	"boteco/internal/chat"
 	"boteco/internal/db"
 	"boteco/internal/gen"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/cursor"
+	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
@@ -21,7 +23,14 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 )
 
-type errMsg struct{ err error }
+type item struct {
+	title, desc string
+}
+
+func (i item) Title() string       { return i.title }
+func (i item) Description() string { return i.desc }
+func (i item) FilterValue() string { return i.desc }
+
 type generatedMsg struct {
 	resp string
 	done bool
@@ -67,6 +76,37 @@ func startGeneration(m model, prompt string) tea.Cmd {
 	return waitChunk(m)
 }
 
+func waitChatResponse(m model) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-m.chatCh
+		if !ok {
+			return nil
+		}
+
+		return msg
+	}
+}
+
+type chatMsg struct {
+	id       uint
+	title    string
+	firstMsg string
+	err      error
+}
+
+func createChat(m model, firstMessage string) tea.Cmd {
+	go func() {
+		title, err := gen.Generate(m.g, "Create a chat title based on this message from the user. Return only the title, nothing else", firstMessage, nil, nil)
+		if err != nil {
+			m.chatCh <- chatMsg{id: 0, title: "", firstMsg: firstMessage, err: err}
+		}
+
+		id, err := chat.NewChat(title)
+		m.chatCh <- chatMsg{id: id, title: title, firstMsg: firstMessage, err: err}
+	}()
+	return waitChatResponse(m)
+}
+
 func WriteMsg(msgs *strings.Builder, m *ai.Message) {
 	var c color.Color
 	t := "\n  " + m.Text() + "\n\n"
@@ -91,8 +131,13 @@ type model struct {
 	viewport       viewport.Model
 	textarea       textarea.Model
 	spinner        spinner.Model
+	list           list.Model
+	mode           string // chat, list
 	spinning       bool
 	g              *genkit.Genkit
+	chatID         uint
+	chatTitle      string
+	chatCh         chan chatMsg
 	messages       []*ai.Message
 	currentMessage string
 	streamCh       chan generatedMsg
@@ -141,6 +186,19 @@ func NewModel() model {
 		panic(err)
 	}
 
+	chats, err := chat.GetChats()
+	if err != nil {
+		panic(err)
+	}
+
+	var listItems []list.Item
+	for _, c := range chats {
+		listItems = append(listItems, item{
+			title: c.Title,
+			desc:  c.CreatedAt.String(),
+		})
+	}
+
 	gen.BuildSystemPrompt(time.Now())
 
 	g, err := gen.InitGenkit()
@@ -153,7 +211,7 @@ func NewModel() model {
 	ta.SetVirtualCursor(false)
 	ta.Focus()
 
-	ta.CharLimit = 10000
+	ta.CharLimit = 50000
 
 	ta.SetWidth(30)
 	ta.SetHeight(3)
@@ -179,8 +237,13 @@ func NewModel() model {
 		textarea:       ta,
 		viewport:       vp,
 		spinner:        sp,
+		list:           list.New(listItems, list.NewDefaultDelegate(), 0, 0),
+		mode:           "chat",
 		spinning:       false,
 		g:              g,
+		chatID:         uint(0),
+		chatTitle:      "",
+		chatCh:         make(chan chatMsg),
 		messages:       []*ai.Message{},
 		currentMessage: "",
 		streamCh:       make(chan generatedMsg),
@@ -196,9 +259,17 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		headerStyle := lipgloss.NewStyle().
+			Bold(true).
+			Padding(1, 1)
+
+		header := headerStyle.Render(m.chatTitle)
+
+		headerHeight := lipgloss.Height(header)
+
 		m.viewport.SetWidth(msg.Width)
 		m.textarea.SetWidth(msg.Width)
-		m.viewport.SetHeight(msg.Height - m.textarea.Height())
+		m.viewport.SetHeight(msg.Height - headerHeight - m.textarea.Height())
 
 		if len(m.messages) > 0 {
 			m.viewport.SetContent(m.renderMessages())
@@ -222,6 +293,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			m.doubleCtrlC = true
 
+		case "ctrl+l":
+			m.mode = "list"
+
 		case "pgup", "pgdown", "ctrl+u", "ctrl+d":
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
@@ -234,12 +308,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			prompt := m.textarea.Value()
 
-			m.messages = append(m.messages, &ai.Message{
+			msgs := []tea.Cmd{
+				startGeneration(m, prompt),
+				m.spinner.Tick,
+			}
+
+			if len(m.messages) == 0 {
+				msgs = append(msgs, createChat(m, prompt))
+			}
+
+			aiMsg := &ai.Message{
 				Role: "user",
 				Content: []*ai.Part{
 					{Text: prompt},
 				},
-			})
+			}
+
+			m.messages = append(m.messages, aiMsg)
+
+			if m.chatID != 0 {
+				chat.InsertMessage(m.chatID, aiMsg)
+			}
 
 			m.textarea.Reset()
 
@@ -249,10 +338,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.generating = true
 			m.spinning = true
 
-			return m, tea.Batch(startGeneration(m, prompt), m.spinner.Tick)
+			return m, tea.Batch(msgs...)
 		}
 
-	case generatedMsg:
+	case chatMsg:
 		if msg.err != nil {
 			m.messages = append(m.messages, &ai.Message{
 				Role:    "assistant",
@@ -268,11 +357,49 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		m.chatID = msg.id
+		m.chatTitle = msg.title
+
+		chat.InsertMessage(m.chatID, &ai.Message{
+			Role: "user",
+			Content: []*ai.Part{
+				{Text: msg.firstMsg},
+			},
+		})
+
+	case generatedMsg:
+		if msg.err != nil {
+			aiMsg := &ai.Message{
+				Role:    "assistant",
+				Content: []*ai.Part{{Text: "error: " + msg.err.Error()}},
+			}
+
+			m.messages = append(m.messages, aiMsg)
+
+			if m.chatID != 0 {
+				chat.InsertMessage(m.chatID, aiMsg)
+			}
+
+			m.spinning = false
+			m.generating = false
+			m.currentMessage = ""
+
+			m.viewport.SetContent(m.renderMessages())
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+
 		if msg.done {
-			m.messages = append(m.messages, &ai.Message{
+			aiMsg := &ai.Message{
 				Role:    "model",
 				Content: []*ai.Part{{Text: m.currentMessage}},
-			})
+			}
+
+			m.messages = append(m.messages, aiMsg)
+
+			if m.chatID != 0 {
+				chat.InsertMessage(m.chatID, aiMsg)
+			}
 
 			m.spinning = false
 			m.generating = false
@@ -312,22 +439,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	var textareaCmd tea.Cmd
-	m.textarea, textareaCmd = m.textarea.Update(msg)
-	return m, textareaCmd
+	switch m.mode {
+	case "list":
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		return m, cmd
+
+	default:
+		var cmd tea.Cmd
+		m.textarea, cmd = m.textarea.Update(msg)
+		return m, cmd
+	}
 }
 
 func (m model) View() tea.View {
-	viewportView := m.viewport.View()
-	v := tea.NewView(viewportView + "\n" + m.textarea.View())
-	v.AltScreen = true
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Padding(1, 1)
+	header := headerStyle.Render(m.chatTitle + "\n" + m.mode)
 
-	c := m.textarea.Cursor()
-	if c != nil {
-		c.Y += lipgloss.Height(viewportView)
+	body := lipgloss.JoinVertical(
+		lipgloss.Left,
+		header,
+		m.viewport.View(),
+		m.textarea.View(),
+	)
+
+	v := tea.NewView(body)
+
+	if c := m.textarea.Cursor(); c != nil {
+		c.Y += lipgloss.Height(header) + lipgloss.Height(m.viewport.View())
+		v.Cursor = c
 	}
-	v.Cursor = c
-	v.AltScreen = true
+
 	return v
 }
 
