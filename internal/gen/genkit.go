@@ -1,8 +1,8 @@
 package gen
 
 import (
-	"boteco/internal/config"
-	"boteco/internal/gen/tools"
+	"warbler/internal/config"
+	"warbler/internal/gen/tools"
 	"context"
 	"fmt"
 	"iter"

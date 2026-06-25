@@ -1,8 +1,8 @@
 package main
 
 import (
-	"boteco/internal/config"
-	"boteco/internal/gen"
+	"warbler/internal/config"
+	"warbler/internal/gen"
 	"fmt"
 	"log/slog"
 	"os"

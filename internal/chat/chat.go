@@ -1,7 +1,7 @@
 package chat
 
 import (
-	"boteco/internal/db"
+	"warbler/internal/db"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"

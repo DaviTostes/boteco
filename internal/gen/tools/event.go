@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"boteco/internal/db"
+	"warbler/internal/db"
 	"encoding/json"
 	"errors"
 

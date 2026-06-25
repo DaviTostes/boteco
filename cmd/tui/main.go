@@ -1,9 +1,9 @@
 package main
 
 import (
-	"boteco/internal/chat"
-	"boteco/internal/db"
-	"boteco/internal/gen"
+	"warbler/internal/chat"
+	"warbler/internal/db"
+	"warbler/internal/gen"
 	"fmt"
 	"image/color"
 	"log/slog"
