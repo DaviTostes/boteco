@@ -10,7 +10,7 @@ var DB *sql.DB
 
 func Connect() error {
 
-	path := "/home/toast/.local/share/boteco/database.sqlite"
+	path := "/home/toast/.local/share/warbler/database.sqlite"
 
 	var err error
 	DB, err = sql.Open("sqlite", path)

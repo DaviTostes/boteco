@@ -1,15 +1,15 @@
 package main
 
 import (
-	"warbler/internal/chat"
-	"warbler/internal/db"
-	"warbler/internal/gen"
 	"fmt"
 	"image/color"
 	"log/slog"
 	"os"
 	"strings"
 	"time"
+	"warbler/internal/chat"
+	"warbler/internal/db"
+	"warbler/internal/gen"
 
 	"charm.land/bubbles/v2/cursor"
 	"charm.land/bubbles/v2/list"
@@ -22,6 +22,13 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 )
+
+var warbler = `
+.-.
+/'v'\
+(/   \)
+='="="===<
+`
 
 type item struct {
 	id          uint
@@ -519,6 +526,28 @@ func (m model) View() tea.View {
 			Bold(true).
 			Padding(1, 1)
 		header := headerStyle.Render(m.chatTitle)
+
+		if len(m.messages) == 0 {
+			title := lipgloss.NewStyle().
+				Width(lipgloss.Width(warbler)).
+				Align(lipgloss.Center, lipgloss.Center).
+				Render("Warbler")
+
+			tagline := lipgloss.NewStyle().
+				Faint(true).
+				Align(lipgloss.Center, lipgloss.Center).
+				Render("Your calendar, search, and memory-enabled assistant.\nAsk me to schedule events, find things, or remember what matters.")
+
+			splash := lipgloss.Place(
+				m.viewport.Width(),
+				m.viewport.Height(),
+				lipgloss.Center,
+				lipgloss.Center,
+				warbler+"\n"+title+"\n\n"+tagline,
+			)
+
+			m.viewport.SetContent(splash)
+		}
 
 		body := lipgloss.JoinVertical(
 			lipgloss.Left,

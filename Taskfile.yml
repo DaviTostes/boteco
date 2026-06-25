@@ -11,4 +11,4 @@ tasks:
       - go run cmd/test/main.go
   make:
     cmds:
-      - go build -o boteco ./cmd/tui/main.go && mv boteco ~/.local/bin/
+      - go build -o warbler ./cmd/tui/main.go && mv warbler ~/.local/bin/

@@ -20,7 +20,7 @@ func getConfigPath() (string, error) {
 		return "", err
 	}
 
-	return filepath.Join(home, ".config", "boteco", "config.json"), nil
+	return filepath.Join(home, ".config", "warbler", "config.json"), nil
 }
 
 func (c *Config) SaveConfig() error {

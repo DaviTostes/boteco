@@ -1,4 +1,4 @@
-# boteco
+# warbler
 
 CLI chat assistant in Go. Uses Genkit + Gemini to stream replies in the
 terminal. Has tool support so it can actually do useful things instead of
@@ -19,7 +19,7 @@ Pretty simple. You ask it something, it can call these:
 
 ## setup
 
-Put this in `~/.config/boteco/config.json`:
+Put this in `~/.config/warbler/config.json`:
 
 ```json
 { "gemini": { "api_key": "AIza...", "model": "googleai/gemini-3.5-flash" } }
